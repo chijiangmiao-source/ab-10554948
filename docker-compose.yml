@@ -1,0 +1,47 @@
+# 星载参数库 MVCC 可串行化冻结审计 —— Compose 编排
+# 宿主机端口可配置：HOST_PORT=9090 docker compose up
+#
+#   docker compose up -d app       启动审计服务
+#   docker compose run --rm verify 单次验收（代码测试 + 镜像构建检查 + HTTP 冒烟），退出码报告结果
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: param-mvcc-audit
+    environment:
+      # 容器内固定监听 8080；宿主机映射端口可配置
+      PORT: "8080"
+      DB_PATH: /data/audits.db
+    ports:
+      # 可配置宿主机端口，默认 8080
+      - "${HOST_PORT:-8080}:8080"
+    volumes:
+      - audit-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,os,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('PORT','8080')+'/healthz',timeout=3); assert json.loads(r.read())['status']=='ok'"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  # verify 单次服务：等待 app 健康后执行全部验收，完成后退出并以退出码报告
+  verify:
+    image: param-mvcc-audit
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      BASE_URL: http://app:8080
+      IMAGE_NAME: param-mvcc-audit
+    # 容器内无 docker CLI，verify 自动执行等价镜像内容自检（字节码编译/零依赖/资源）
+    command: ["python", "verify.py"]
+    profiles: ["verify"]
+
+volumes:
+  audit-data:
